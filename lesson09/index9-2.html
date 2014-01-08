@@ -1,0 +1,464 @@
+<html>
+
+<head>
+<title>WebGL course 9(v1) Stars move arround the touch/mouse position</title>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<link rel="stylesheet" href="webgl.css" type="text/css">
+
+<script type="text/javascript" src="../GLjs/glMatrix-0.9.5.min.js"></script>
+<script type="text/javascript" src="../PointerEvents-stable/src/pointerevents.js"></script>
+
+<script id="shader-fs" type="x-shader/x-fragment">
+    precision mediump float;
+
+    varying vec2 vTextureCoord;
+
+    uniform sampler2D uSampler;
+
+    uniform vec3 uColor;
+
+    void main(void) {
+        vec4 textureColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+        gl_FragColor = textureColor * vec4(uColor, 1.0);
+    }
+</script>
+
+<script id="shader-vs" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec2 aTextureCoord;
+
+    uniform mat4 uMVPMatrix;
+
+    varying vec2 vTextureCoord;
+
+    void main(void) {
+        gl_Position = uMVPMatrix * vec4(aVertexPosition, 1.0);
+        vTextureCoord = aTextureCoord;
+    }
+</script>
+
+
+<script type="text/javascript">
+
+    var gl;
+
+    function initGL(canvas) {
+        try {
+            gl = canvas.getContext("webgl");
+            gl.viewportWidth = canvas.width;
+            gl.viewportHeight = canvas.height;
+        } catch (e) {
+	    try {
+		gl = canvas.getContext("experimental-webgl");
+		gl.viewportWidth = canvas.width;
+		gl.viewportHeight = canvas.height;
+            } catch (e) { }
+        }
+        if (!gl) {
+            alert("Could not initialise WebGL, sorry :-(\nPlease to \"http://get.webgl.org\" get one");
+	    if("click ok to continue")
+		window.location = "http://get.webgl.org";
+        }
+    }
+
+
+    function getShader(gl, id) {
+        var shaderScript = document.getElementById(id);
+        if (!shaderScript) {
+            return null;
+        }
+
+        var str = shaderScript.textContent;
+
+        var shader;
+        if (shaderScript.type == "x-shader/x-fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } else if (shaderScript.type == "x-shader/x-vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } else {
+            return null;
+        }
+
+        gl.shaderSource(shader, str);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+
+        return shader;
+    }
+
+
+    var shaderProgram;
+
+    function initShaders() {
+        var fragmentShader = getShader(gl, "shader-fs");
+        var vertexShader = getShader(gl, "shader-vs");
+
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+
+        gl.useProgram(shaderProgram);
+
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+        shaderProgram.textureCoordAttribute = gl.getAttribLocation(shaderProgram, "aTextureCoord");
+        gl.enableVertexAttribArray(shaderProgram.textureCoordAttribute);
+
+        shaderProgram.mvpMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVPMatrix");
+        shaderProgram.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler");
+        shaderProgram.colorUniform = gl.getUniformLocation(shaderProgram, "uColor");
+    }
+
+
+    function handleLoadedTexture(texture) {
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texture.image);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+
+        gl.bindTexture(gl.TEXTURE_2D, null);
+
+        tick();
+    }
+
+
+    var starTexture;
+
+    function initTexture() {
+        starTexture = gl.createTexture();
+        starTexture.image = new Image();
+        starTexture.image.onload = function () {
+            handleLoadedTexture(starTexture);
+        }
+
+        starTexture.image.src = "star.gif";
+    }
+
+
+    var mvMatrix = mat4.create();
+    var mvMatrixStack = [];
+    var pMatrix = mat4.create();
+
+    function mvPushMatrix() {
+        var copy = mat4.create();
+        mat4.set(mvMatrix, copy);
+        mvMatrixStack.push(copy);
+    }
+
+    function mvPopMatrix() {
+        if (mvMatrixStack.length == 0) {
+            throw "Invalid popMatrix!";
+        }
+        mvMatrix = mvMatrixStack.pop();
+    }
+
+
+    function setMatrixUniforms() {
+        var mvpMatrix = mat4.create();
+        mat4.multiply(pMatrix, mvMatrix, mvpMatrix);
+        gl.uniformMatrix4fv(shaderProgram.mvpMatrixUniform, false, mvpMatrix);
+    }
+
+
+    function degToRad(degrees) {
+        return degrees * Math.PI / 180;
+    }
+
+
+    var currentlyPressedKeys = {};
+
+    function handleKeyDown(event) {
+        currentlyPressedKeys[event.keyCode] = true;
+    }
+
+
+    function handleKeyUp(event) {
+        currentlyPressedKeys[event.keyCode] = false;
+    }
+
+
+    var zoom = -15;
+
+
+    var tilt = 90;
+    var spin = 0;
+
+
+    function handleKeys() {
+        if (currentlyPressedKeys[33]) {
+            // Page Up
+            zoom -= 0.1;
+        }
+        if (currentlyPressedKeys[34]) {
+            // Page Down
+            zoom += 0.1;
+        }
+        if (currentlyPressedKeys[38]) {
+            // Up cursor key
+            tilt += 2;
+        }
+        if (currentlyPressedKeys[40]) {
+            // Down cursor key
+            tilt -= 2;
+        }
+    }
+
+    var pointers = {};
+    var lastPointerX = 0;
+    var lastPointerY = 0;
+
+    function handlePointerDown(event) {
+	pointers[event.pointerId] = {
+	  x: event.clientX,
+	  y: event.clientY,
+	  pointerType: event.pointerType,
+	  pointerId: event.pointerId
+    	};
+	lastPointerX = (12.0*event.clientX)/gl.viewportWidth-6.0;
+	lastPointerY = 6.0-(12.0*event.clientY)/gl.viewportHeight;
+    }
+
+    function handlePointerMove(event) {
+	if(pointers[event.pointerId]) {
+	    lastPointerX = (12.0*event.clientX)/gl.viewportWidth-6.0;
+	    lastPointerY = 6.0-(12.0*event.clientY)/gl.viewportHeight;
+	}
+    }
+
+    function handlePointerUp(event) {
+	delete pointers[event.pointerId];
+    }
+
+
+    var starVertexPositionBuffer;
+    var starVertexTextureCoordBuffer;
+
+    function initBuffers() {
+        starVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, starVertexPositionBuffer);
+        vertices = [
+            -1.0, -1.0,  0.0,
+             1.0, -1.0,  0.0,
+            -1.0,  1.0,  0.0,
+             1.0,  1.0,  0.0
+        ];
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+        starVertexPositionBuffer.itemSize = 3;
+        starVertexPositionBuffer.numItems = 4;
+
+        starVertexTextureCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, starVertexTextureCoordBuffer);
+        var textureCoords = [
+            0.0, 0.0,
+            1.0, 0.0,
+            0.0, 1.0,
+            1.0, 1.0
+        ];
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+        starVertexTextureCoordBuffer.itemSize = 2;
+        starVertexTextureCoordBuffer.numItems = 4;
+    }
+
+
+    function drawStar() {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, starTexture);
+        gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, starVertexTextureCoordBuffer);
+        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, starVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, starVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, starVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        setMatrixUniforms();
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, starVertexPositionBuffer.numItems);
+    }
+
+
+
+    function Star(startingDistance, rotationSpeed) {
+        this.angle = 0;
+	if ((lastPointerX == lastPointerY) & (lastPointerX == 0))
+        	this.dist = startingDistance;
+	else
+		this.dist = sqrt(lastPointerX*lastPointerX + lastPointerY*lastPointerY);
+        this.rotationSpeed = rotationSpeed;
+
+        // Set the colors to a starting value.
+        this.randomiseColors();
+    }
+
+    Star.prototype.draw = function (tilt, spin, twinkle) {
+        mvPushMatrix();
+
+        // Move to the star's position
+        mat4.rotate(mvMatrix, degToRad(this.angle), [0.0, 1.0, 0.0]);
+        mat4.translate(mvMatrix, [this.dist, 0.0, 0.0]);
+
+        // Rotate back so that the star is facing the viewer
+        mat4.rotate(mvMatrix, degToRad(-tilt), [1.0, 0.0, 0.0]);
+
+        if (twinkle) {
+            // Draw a non-rotating star in the alternate "twinkling" color
+            gl.uniform3f(shaderProgram.colorUniform, this.twinkleR, this.twinkleG, this.twinkleB);
+            drawStar();
+        }
+
+        // All stars spin around the Z axis at the same rate
+        mat4.rotate(mvMatrix, degToRad(spin), [0.0, 0.0, 1.0]);
+
+        // Draw the star in its main color
+        gl.uniform3f(shaderProgram.colorUniform, this.r, this.g, this.b);
+        drawStar()
+
+        mvPopMatrix();
+    };
+
+
+    var effectiveFPMS = 60 / 1000;
+    Star.prototype.animate = function (elapsedTime) {
+        this.angle += this.rotationSpeed * effectiveFPMS * elapsedTime;
+
+        // Decrease the distance, resetting the star to the outside of
+        // the spiral if it's at the center.
+        this.dist -= 0.004 * effectiveFPMS * elapsedTime;
+        if (this.dist < 0.0) {
+            this.dist += 3.0;
+            this.randomiseColors();
+        }
+
+    };
+
+
+    Star.prototype.randomiseColors = function () {
+        // Give the star a random color for normal
+        // circumstances...
+        this.r = Math.random();
+        this.g = Math.random();
+        this.b = Math.random();
+
+        // When the star is twinkling, we draw it twice, once
+        // in the color below (not spinning) and then once in the
+        // main color defined above.
+        this.twinkleR = Math.random();
+        this.twinkleG = Math.random();
+        this.twinkleB = Math.random();
+    };
+
+
+
+    var stars = [];
+
+    function initWorldObjects() {
+        var numStars = 20;
+
+        for (var i=0; i < numStars; i++) {
+            stars.push(new Star((i / numStars) * 2.0, i / numStars));
+        }
+    }
+
+
+    function drawScene() {
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
+
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+        gl.enable(gl.BLEND);
+
+        mat4.identity(mvMatrix);
+        mat4.translate(mvMatrix, [lastPointerX, lastPointerY, zoom]);
+        mat4.rotate(mvMatrix, degToRad(tilt), [1.0, 0.0, 0.0]);
+
+        var twinkle = document.getElementById("twinkle").checked;
+        for (var i in stars) {
+            stars[i].draw(tilt, spin, twinkle);
+            spin += 0.1;
+        }
+
+    }
+
+
+    var lastTime = 0;
+
+    function animate() {
+        var timeNow = new Date().getTime();
+        if (lastTime != 0) {
+            var elapsed = timeNow - lastTime;
+	    this.tilt += (3.0 * elapsed) / 1000.0;
+
+            for (var i in stars) {
+                stars[i].animate(elapsed);
+            }
+        }
+        lastTime = timeNow;
+
+    }
+
+
+    function tick() {
+        window.requestAnimationFrame(tick);
+        handleKeys();
+        drawScene();
+        animate();
+    }
+
+
+
+    function webGLStart() {
+        var canvas = document.getElementById("lesson09-canvas");
+        canvas.setAttribute( 'touch-action', 'none' );
+        initGL(canvas);
+        initShaders();
+        initBuffers();
+        initTexture();
+        initWorldObjects();
+
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+
+        document.onkeydown = handleKeyDown;
+        document.onkeyup = handleKeyUp;
+
+	canvas.addEventListener( 'pointerdown', handlePointerDown, false);
+	canvas.addEventListener( 'pointermove', handlePointerMove, false);
+	canvas.addEventListener( 'pointerup', handlePointerUp, false);
+
+        
+    }
+
+</script>
+
+
+</head>
+
+
+<body onload="webGLStart();">
+    <a href="http://learningwebgl.com/blog/?p=1008">&lt;&lt; Back to Lesson 9</a><br />
+
+    <canvas id="lesson09-canvas" style="border: none;" width="500" height="500"></canvas>
+
+    <br/>
+    <div class="button-labels">
+    <input type="checkbox" id="twinkle" /><label for="twinkle">Twinkle</label></div><br/>
+    (Touch canvas can see Stars move arround that position; Press up/down cursor keys to rotate, and <code>Page Up</code>/<code>Page Down</code> to zoom out/in)
+
+    <br/>
+    <br/>
+    <a href="http://learningwebgl.com/blog/?p=1008">&lt;&lt; Back to Lesson 9</a>
+    <p align="center">===MIT license===</p>
+</body>
+
+</html>
