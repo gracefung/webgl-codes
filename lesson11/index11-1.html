@@ -1,0 +1,623 @@
+<html>
+
+<head>
+<title>WebGL course 11(v1) shake/touch/scroll sphere</title>
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+<script type="text/javascript" src="../GLjs/glMatrix-0.9.5.min.js"></script>
+
+<script id="shader-fs" type="x-shader/x-fragment">
+    precision mediump float;
+
+    varying vec2 vTextureCoord;
+    varying vec3 vLightWeighting;
+
+    uniform sampler2D uSampler;
+
+    void main(void) {
+        vec4 textureColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+        gl_FragColor = vec4(textureColor.rgb * vLightWeighting, textureColor.a);
+    }
+</script>
+
+<script id="shader-vs" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexNormal;
+    attribute vec2 aTextureCoord;
+
+    uniform mat4 uMVPMatrix;
+    uniform mat3 uNMatrix;
+
+    uniform vec3 uAmbientColor;
+
+    uniform vec3 uLightingDirection;
+    uniform vec3 uDirectionalColor;
+
+    uniform bool uUseLighting;
+
+    varying vec2 vTextureCoord;
+    varying vec3 vLightWeighting;
+
+    void main(void) {
+        gl_Position = uMVPMatrix * vec4(aVertexPosition, 1.0);
+        vTextureCoord = aTextureCoord;
+
+        if (!uUseLighting) {
+            vLightWeighting = vec3(1.0, 1.0, 1.0);
+        } else {
+            vec3 transformedNormal = uNMatrix * aVertexNormal;
+            float directionalLightWeighting = max(dot(transformedNormal, uLightingDirection), 0.0);
+            vLightWeighting = uAmbientColor + uDirectionalColor * directionalLightWeighting;
+        }
+    }
+</script>
+
+
+<script type="text/javascript">
+
+
+    var gl;
+
+    function initGL(canvas) {
+        try {
+            gl = canvas.getContext("webgl");
+            gl.viewportWidth = canvas.width;
+            gl.viewportHeight = canvas.height;
+        } catch (e) {
+	    try {
+		gl = canvas.getContext("experimental-webgl");
+		gl.viewportWidth = canvas.width;
+		gl.viewportHeight = canvas.height;
+            } catch (e) { }
+        }
+        if (!gl) {
+            alert("Could not initialise WebGL, sorry :-(\nPlease to \"http://get.webgl.org\" get one");
+	    if("click ok to continue")
+		window.location = "http://get.webgl.org";
+        }
+    }
+
+
+    function getShader(gl, id) {
+        var shaderScript = document.getElementById(id);
+        if (!shaderScript) {
+            return null;
+        }
+
+        var str = shaderScript.textContent;
+
+        var shader;
+        if (shaderScript.type == "x-shader/x-fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } else if (shaderScript.type == "x-shader/x-vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } else {
+            return null;
+        }
+
+        gl.shaderSource(shader, str);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+
+        return shader;
+    }
+
+
+    var shaderProgram;
+
+    function initShaders() {
+        var fragmentShader = getShader(gl, "shader-fs");
+        var vertexShader = getShader(gl, "shader-vs");
+
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+
+        gl.useProgram(shaderProgram);
+
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+        shaderProgram.textureCoordAttribute = gl.getAttribLocation(shaderProgram, "aTextureCoord");
+        gl.enableVertexAttribArray(shaderProgram.textureCoordAttribute);
+
+        shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+        gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute);
+
+        shaderProgram.mvpMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVPMatrix");
+        shaderProgram.nMatrixUniform = gl.getUniformLocation(shaderProgram, "uNMatrix");
+        shaderProgram.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler");
+        shaderProgram.useLightingUniform = gl.getUniformLocation(shaderProgram, "uUseLighting");
+        shaderProgram.ambientColorUniform = gl.getUniformLocation(shaderProgram, "uAmbientColor");
+        shaderProgram.lightingDirectionUniform = gl.getUniformLocation(shaderProgram, "uLightingDirection");
+        shaderProgram.directionalColorUniform = gl.getUniformLocation(shaderProgram, "uDirectionalColor");
+    }
+
+
+    function handleLoadedTexture(texture) {
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texture.image);
+	if (isPowerOfTwo(texture.image.width) && isPowerOfTwo(texture.image.height)){
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+	    gl.generateMipmap(gl.TEXTURE_2D);
+	} else {
+	    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+	    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+	}        
+
+        gl.bindTexture(gl.TEXTURE_2D, null);
+
+        tick();
+    }
+
+    function isPowerOfTwo(x) {
+        return (x & (x - 1)) == 0;
+    }
+
+    var moonTexture;
+
+    function initTexture(textureimg) {
+        moonTexture = gl.createTexture();
+        moonTexture.image = new Image();
+        moonTexture.image.onload = function () {
+            handleLoadedTexture(moonTexture)
+        }
+
+        moonTexture.image.src = textureimg;
+    }
+
+    //shake
+    var last_update = 0;
+    var last_x, last_y, last_z;
+    var count = 0;    
+    function deviceMotionHandler(event,imgpath) {
+	var acceleration = event.accelerationIncludingGravity;
+
+	var curTime = new Date().getTime();
+	var diffTime = curTime-last_update;
+
+	if(diffTime > 100){
+	    last_update = curTime;
+	    var speed = Math.abs(acceleration.x-last_x+acceleration.y-last_y+acceleration.z-last_z)/diffTime * 10000;
+
+	    if(speed > 3000) {//SHAKE_THRESHOLD = 3000
+		count++;
+		document.getElementById("doEvent").innerHTML = " shake! count: "+count;
+		document.getElementById("doEvent").style.fontWeight="bold";
+		initTexture(imgpath[count%imgpath.length]);
+	    }
+	    last_x=acceleration.x;
+	    last_y=acceleration.y;
+	    last_z=acceleration.z;
+	}
+    }
+
+    function handleLoadedImg(data) {
+	
+        var lines = data.split("\n");
+	var i=0, len=lines.length-2;
+	var imgpath = new Array();
+        for (i=0; i<len; i++) {
+	    imgpath[i]="img/"+lines[i+1];
+        }
+	if (window.DeviceMotionEvent) {
+	    window.addEventListener('devicemotion', function(event){
+		deviceMotionHandler(event,imgpath);
+		}, false);
+	    if(count==0) {
+		document.getElementById("loadingtext").textContent = "";
+		initTexture(imgpath[0]);
+	    }
+	    document.getElementById("doEvent").innerHTML = "default texture image:0, please SHAKE device";
+		document.getElementById("doEvent").style.fontWeight="bold";
+	} else {
+	    document.getElementById("doEvent").innerHTML = "Not supported.";
+	}	
+    }
+
+
+    function loadImg() {
+        var request = new XMLHttpRequest();
+        request.open("GET", "image.txt");
+        request.onreadystatechange = function () {
+            if (request.readyState == 4) {
+                handleLoadedImg(request.responseText);
+            }
+        }
+        request.send();
+    }
+
+
+
+    var mvMatrix = mat4.create();
+    var mvMatrixStack = [];
+    var pMatrix = mat4.create();
+
+    function mvPushMatrix() {
+        var copy = mat4.create();
+        mat4.set(mvMatrix, copy);
+        mvMatrixStack.push(copy);
+    }
+
+    function mvPopMatrix() {
+        if (mvMatrixStack.length == 0) {
+            throw "Invalid popMatrix!";
+        }
+        mvMatrix = mvMatrixStack.pop();
+    }
+
+    function setMatrixUniforms() {
+	var mvpMatrix = mat4.create();
+	mat4.multiply(pMatrix, mvMatrix, mvpMatrix);
+        gl.uniformMatrix4fv(shaderProgram.mvpMatrixUniform, false, mvpMatrix);
+
+        var normalMatrix = mat3.create();
+        mat4.toInverseMat3(mvMatrix, normalMatrix);
+        mat3.transpose(normalMatrix);
+        gl.uniformMatrix3fv(shaderProgram.nMatrixUniform, false, normalMatrix);
+    }
+
+
+    function degToRad(degrees) {
+        return degrees * Math.PI / 180;
+    }
+
+
+    var mouseDown = false;
+    var lastMouseX = null;
+    var lastMouseY = null;
+
+    var moonRotationMatrix = mat4.create();
+    mat4.identity(moonRotationMatrix);
+
+    function handleMouseDown(event) {
+        mouseDown = true;
+        lastMouseX = event.clientX;
+        lastMouseY = event.clientY;
+    }
+
+    function handleTouchStart(event) {
+	event.preventDefault();
+	var touches = event.changedTouches;
+
+	if(touches.length > 0) {
+	    lastMouseX = event.touches[0].pageX;
+	    lastMouseY = event.touches[0].pageY;
+	}
+    }
+
+
+    function handleMouseUpOrTouchEnd(event) {
+	mouseDown = false;
+    }
+
+    function processDrag(newX, newY) {
+        var deltaX = newX - lastMouseX
+        var newRotationMatrix = mat4.create();
+        mat4.identity(newRotationMatrix);
+        mat4.rotate(newRotationMatrix, degToRad(deltaX / 10), [0, 1, 0]);
+
+        var deltaY = newY - lastMouseY;
+        mat4.rotate(newRotationMatrix, degToRad(deltaY / 10), [1, 0, 0]);
+
+        mat4.multiply(newRotationMatrix, moonRotationMatrix, moonRotationMatrix);
+
+        lastMouseX = newX
+        lastMouseY = newY;
+    }
+
+    function handleMouseMove(event) {
+        if (!mouseDown) {
+            return;
+        }
+        var newX = event.clientX;
+        var newY = event.clientY;
+
+        processDrag(newX, newY);
+    }
+
+
+    var z=-6.0;
+    function handleTouchMove(event) {
+	event.preventDefault();
+	var touches = event.changedTouches;
+
+	if(touches.length == 1) {
+	    var newX = event.touches[0].pageX;
+	    var newY = event.touches[0].pageY;
+
+	    processDrag(newX, newY);
+	} else if(touches.length == 2){
+	    var delta = lastMouseX - event.touches[0].pageX;
+	    if(delta == 0) {
+		delta = lastMouseY - event.touches[0].pageY;
+	    }
+	    handleScroll(delta, 0.05);
+	}
+    }
+
+
+    function handleMouseWheel(event)
+    {
+        var delta = 0;
+        if (!event) /* For IE. */
+            event = window.event;
+        if (event.wheelDelta) { /* IE/Opera. */
+            delta = event.wheelDelta/120;
+        } else if (event.detail) { /** Mozilla case. */
+            /** In Mozilla, sign of delta is different than in IE.
+             * Also, delta is multiple of 3.
+             */
+            delta = -event.detail/3;
+        }
+        /** If delta is nonzero, handle it.
+         * Basically, delta is now positive if wheel was scrolled up,
+         * and negative, if wheel was scrolled down.
+         */
+        if (delta)
+            handleScroll(delta,0.25);
+        /** Prevent default actions caused by mouse wheel.
+         * That might be ugly, but we handle scrolls somehow
+         * anyway, so don?t bother here..
+         */
+        if (event.preventDefault)
+            event.preventDefault();
+        event.returnValue = false;
+ 
+    }
+ 
+    function handleScroll(delta, rate)
+    {
+        if (delta < 0)
+            z=z-rate;
+        else
+            z=z+rate;
+    }
+
+
+    var moonVertexPositionBuffer;
+    var moonVertexNormalBuffer;
+    var moonVertexTextureCoordBuffer;
+    var moonVertexIndexBuffer;
+
+    function initBuffers() {
+        var latitudeBands = 30;
+        var longitudeBands = 30;
+        var radius = 2;
+
+        var vertexPositionData = [];
+        var normalData = [];
+        var textureCoordData = [];
+        for (var latNumber=0; latNumber <= latitudeBands; latNumber++) {
+            var theta = latNumber * Math.PI / latitudeBands;
+            var sinTheta = Math.sin(theta);
+            var cosTheta = Math.cos(theta);
+
+            for (var longNumber=0; longNumber <= longitudeBands; longNumber++) {
+                var phi = longNumber * 2 * Math.PI / longitudeBands;
+                var sinPhi = Math.sin(phi);
+                var cosPhi = Math.cos(phi);
+
+                var x = cosPhi * sinTheta;
+                var y = cosTheta;
+                var z = sinPhi * sinTheta;
+                var u = 1 - (longNumber / longitudeBands);
+                var v = 1 - (latNumber / latitudeBands);
+
+                normalData.push(x);
+                normalData.push(y);
+                normalData.push(z);
+                textureCoordData.push(u);
+                textureCoordData.push(v);
+                vertexPositionData.push(radius * x);
+                vertexPositionData.push(radius * y);
+                vertexPositionData.push(radius * z);
+            }
+        }
+
+        var indexData = [];
+        for (var latNumber=0; latNumber < latitudeBands; latNumber++) {
+            for (var longNumber=0; longNumber < longitudeBands; longNumber++) {
+                var first = (latNumber * (longitudeBands + 1)) + longNumber;
+                var second = first + longitudeBands + 1;
+                indexData.push(first);
+                indexData.push(second);
+                indexData.push(first + 1);
+
+                indexData.push(second);
+                indexData.push(second + 1);
+                indexData.push(first + 1);
+            }
+        }
+
+        moonVertexNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, moonVertexNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normalData), gl.STATIC_DRAW);
+        moonVertexNormalBuffer.itemSize = 3;
+        moonVertexNormalBuffer.numItems = normalData.length / 3;
+
+        moonVertexTextureCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, moonVertexTextureCoordBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoordData), gl.STATIC_DRAW);
+        moonVertexTextureCoordBuffer.itemSize = 2;
+        moonVertexTextureCoordBuffer.numItems = textureCoordData.length / 2;
+
+        moonVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, moonVertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertexPositionData), gl.STATIC_DRAW);
+        moonVertexPositionBuffer.itemSize = 3;
+        moonVertexPositionBuffer.numItems = vertexPositionData.length / 3;
+
+        moonVertexIndexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, moonVertexIndexBuffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indexData), gl.STATIC_DRAW);
+        moonVertexIndexBuffer.itemSize = 1;
+        moonVertexIndexBuffer.numItems = indexData.length;
+    }
+
+
+    function drawScene() {
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
+
+        var lighting = document.getElementById("lighting").checked;
+        gl.uniform1i(shaderProgram.useLightingUniform, lighting);
+        if (lighting) {
+            gl.uniform3f(
+                shaderProgram.ambientColorUniform,
+                parseFloat(document.getElementById("ambientR").value),
+                parseFloat(document.getElementById("ambientG").value),
+                parseFloat(document.getElementById("ambientB").value)
+            );
+
+            var lightingDirection = [
+                parseFloat(document.getElementById("lightDirectionX").value),
+                parseFloat(document.getElementById("lightDirectionY").value),
+                parseFloat(document.getElementById("lightDirectionZ").value)
+            ];
+            var adjustedLD = vec3.create();
+            vec3.normalize(lightingDirection, adjustedLD);
+            vec3.scale(adjustedLD, -1);
+            gl.uniform3fv(shaderProgram.lightingDirectionUniform, adjustedLD);
+
+            gl.uniform3f(
+                shaderProgram.directionalColorUniform,
+                parseFloat(document.getElementById("directionalR").value),
+                parseFloat(document.getElementById("directionalG").value),
+                parseFloat(document.getElementById("directionalB").value)
+            );
+        }
+
+        mat4.identity(mvMatrix);
+
+	mat4.translate(mvMatrix, [0.0, 0.0, z]);
+
+        mat4.multiply(mvMatrix, moonRotationMatrix);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, moonTexture);
+        gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, moonVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, moonVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, moonVertexTextureCoordBuffer);
+        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, moonVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, moonVertexNormalBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, moonVertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, moonVertexIndexBuffer);
+        setMatrixUniforms();
+        gl.drawElements(gl.TRIANGLES, moonVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+    }
+
+
+    function tick() {
+        window.requestAnimationFrame(tick);
+        drawScene();
+    }
+
+
+    function webGLStart() {
+        var canvas = document.getElementById("lesson11-canvas");
+        initGL(canvas);
+        initShaders();
+
+        initBuffers();
+	loadImg();
+
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.enable(gl.DEPTH_TEST);
+        
+	canvas.onmousedown = handleMouseDown;
+	document.onmouseup = handleMouseUpOrTouchEnd;
+	document.onmousemove = handleMouseMove;
+        canvas.addEventListener('DOMMouseScroll',handleMouseWheel, false); //firefox
+        canvas.addEventListener('mousewheel',handleMouseWheel, false);
+
+	canvas.addEventListener( 'touchstart', handleTouchStart, false);
+	canvas.addEventListener( 'touchend', handleMouseUpOrTouchEnd, false);
+	canvas.addEventListener( 'touchmove', handleTouchMove, false);
+
+    }
+
+</script>
+
+<style type="text/css">
+    #loadingtext {
+        position:absolute;
+        top:250px;
+        left:150px;
+        font-size:2em;
+        color: white;
+    }
+</style>
+
+</head>
+
+
+<body onload="webGLStart();">
+<div id="doEvent">SHAKE your device</div>
+    <a href="http://html5.iii.org.tw/webgl/?p=508">&lt;&lt; Back to Lesson 11</a><br />
+This version(v1) is touch/shake/scroll effect. Shake device you can see different texture image. Use two fingers to drag, the sphere become large or small (compare with <a href="index.html">original effect</a>)<br />
+
+    <canvas id="lesson11-canvas" style="border: none;" width="500" height="500"></canvas>
+    <div id="loadingtext">Loading world...</div>
+    <br/>
+
+    <input type="checkbox" id="lighting" checked /> Use lighting<br/>
+    Spin the moon by dragging it with the mouse.
+    <br/>
+
+    <h2>Directional light:</h2>
+
+    <table style="border: 0; padding: 10px;">
+        <tr>
+            <td><b>Direction:</b>
+            <td>X: <input type="text" id="lightDirectionX" value="-1.0" />
+            <td>Y: <input type="text" id="lightDirectionY" value="-1.0" />
+            <td>Z: <input type="text" id="lightDirectionZ" value="-1.0" />
+        </tr>
+        <tr>
+            <td><b>Colour:</b>
+            <td>R: <input type="text" id="directionalR" value="0.8" />
+            <td>G: <input type="text" id="directionalG" value="0.8" />
+            <td>B: <input type="text" id="directionalB" value="0.8" />
+        </tr>
+    </table>
+
+
+    <h2>Ambient light:</h2>
+
+    <table style="border: 0; padding: 10px;">
+        <tr>
+            <td><b>Colour:</b>
+            <td>R: <input type="text" id="ambientR" value="0.2" />
+            <td>G: <input type="text" id="ambientG" value="0.2" />
+            <td>B: <input type="text" id="ambientB" value="0.2" />
+        </tr>
+    </table>
+    <br/>
+
+
+    <a href="http://html5.iii.org.tw/webgl/?p=508">&lt;&lt; Back to Lesson 11</a><br />
+<p align="center">===MIT license &#38; Textures courtesy of <a href="http://maps.jpl.nasa.gov/">the Jet Propulsion Laboratory</a>===</p>
+</body>
+
+</html>
