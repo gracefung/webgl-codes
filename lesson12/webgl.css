@@ -1,0 +1,16 @@
+.button-labels label {
+    line-height: 2em;
+    padding: 1px 10px;
+    border:2px solid #456879; border-radius:10px;
+    margin-left: 0.5em; margin-right: 2em;
+    font-size: 18px;
+    font-family: Arial, serif;
+    color: white;
+    background-color:#65a9d7;
+}
+
+.button-labels input:checked + label {
+    background-color:#99FFCC;
+    position: relative;
+    color:#000;
+}
